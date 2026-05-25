@@ -1,0 +1,437 @@
+<!doctype html>
+<html>
+  <body>
+    <h1>LSS Graph Engine Loaded</h1>
+
+    <script src="https://cdn.jsdelivr.net/npm/@logseq/libs/dist/lsplugin.user.js"></script>
+
+    <script>
+      const LSS = {};
+
+      LSS.REGISTRY = {
+        areas: [
+          { name: "Learning", page: "Area/Learning" },
+          { name: "Health", page: "Area/Health" },
+          { name: "Work", page: "Area/Work" },
+          { name: "Pursuits", page: "Area/Pursuits" }
+        ],
+
+        entities: [
+          { name: "Subject", page: "Entity/Subject", area: "Area/Learning", template: "Templates/subject", description: "Knowledge domain" },
+          { name: "Course", page: "Entity/Course", area: "Area/Learning", template: "Templates/course", description: "Structured learning program" },
+          { name: "Lesson", page: "Entity/Lesson", area: "Area/Learning", template: "Templates/lesson", description: "Discrete learning session" },
+          { name: "Concept", page: "Entity/Concept", area: "Area/Learning", template: "Templates/concept", description: "Specific idea within a subject" },
+          { name: "Skill", page: "Entity/Skill", area: "Area/Learning", template: "Templates/skill", description: "Capability being built" },
+
+          { name: "Venture", page: "Entity/Venture", area: "Area/Work", template: "Templates/venture", description: "Business you own/run" },
+          { name: "Function", page: "Entity/Function", area: "Area/Work", template: "Templates/function", description: "Business function" },
+          { name: "Project", page: "Entity/Project", area: "Area/Work", template: "Templates/project", description: "Bounded effort" },
+          { name: "Organisation", page: "Entity/Organisation", area: "Area/Work", template: "Templates/organisation", description: "Organisation" },
+          { name: "Person", page: "Entity/Person", area: "Cross-Cutting", template: "Templates/person", description: "Individual human" },
+          { name: "Document", page: "Entity/Document", area: "Cross-Cutting", template: "Templates/document", description: "Document" },
+          { name: "Notebook", page: "Entity/Notebook", area: "Cross-Cutting", template: "Templates/notebook", description: "Curated thematic collection" }
+        ],
+
+        forms: [
+          { name: "Question", page: "Form/Question", template: "Templates/question" },
+          { name: "Insight", page: "Form/Insight", template: "Templates/insight" },
+          { name: "Decision", page: "Form/Decision", template: "Templates/decision" },
+          { name: "Idea", page: "Form/Idea", template: "Templates/idea" },
+          { name: "Note", page: "Form/Note", template: "Templates/note" },
+          { name: "Action-Item", page: "Form/Action-Item", template: "Templates/action-item" }
+        ]
+      };
+
+      LSS.PARENT_RULES = {
+        Subject: { defaultParent: "Area/Learning" },
+        Course: { parentEntityType: "Entity/Subject" },
+        Lesson: { parentEntityType: "Entity/Course" },
+        Concept: { parentEntityType: "Entity/Subject" },
+        Skill: { parentEntityType: "Entity/Subject" },
+        Venture: { defaultParent: "Area/Work" },
+        Function: { parentEntityType: "Entity/Venture" },
+        Project: { parentEntityType: "Entity/Venture" },
+        Organisation: { defaultParent: "Area/Work" },
+        Document: { parentEntityType: "Entity/Project" },
+        Notebook: { defaultParent: "Area/Learning" }
+      };
+
+      LSS.nowISO = () => new Date().toISOString();
+
+      LSS.cleanName = function(name) {
+        return String(name || "")
+          .trim()
+          .replaceAll("[[", "")
+          .replaceAll("]]", "")
+          .replace(/#/g, "")
+          .replace(/\s+/g, " ");
+      };
+
+      LSS.ensurePage = async function(pageName, content = "") {
+        let page = await logseq.Editor.getPage(pageName);
+
+        if (!page) {
+          await logseq.Editor.createPage(pageName, {}, { redirect: false });
+        }
+
+        if (content) {
+          await logseq.Editor.appendBlockInPage(pageName, content);
+        }
+      };
+
+      LSS.appendBlock = async function(pageName, content) {
+        await LSS.ensurePage(pageName);
+        await logseq.Editor.appendBlockInPage(pageName, content);
+      };
+
+      LSS.getPageBlocks = async function(pageName) {
+        try {
+          return await logseq.Editor.getPageBlocksTree(pageName) || [];
+        } catch (e) {
+          return [];
+        }
+      };
+
+      LSS.blockTreeToMarkdown = function(blocks, depth = 0) {
+        let output = "";
+
+        for (const block of blocks || []) {
+          const indent = "  ".repeat(depth);
+          output += `${indent}- ${block.content || ""}\n`;
+
+          if (block.children && block.children.length) {
+            output += LSS.blockTreeToMarkdown(block.children, depth + 1);
+          }
+        }
+
+        return output;
+      };
+
+      LSS.expandTemplate = async function(templatePage) {
+        const blocks = await LSS.getPageBlocks(templatePage);
+
+        if (!blocks.length) {
+          return `- Template Missing
+  - Add content to [[${templatePage}]]`;
+        }
+
+        return LSS.blockTreeToMarkdown(blocks);
+      };
+
+      LSS.entityQueries = function(pageName, entityPage, areaPage) {
+        return `- Graph Queries
+  - Children
+    - {{query (page-property parent [[${pageName}]])}}
+  - Same Entity Type
+    - {{query (page-property entity-type [[${entityPage}]])}}
+  - Same Area
+    - {{query (page-property related-area [[${areaPage}]])}}
+  - Related Questions
+    - {{query (and (page-property form-type [[Form/Question]]) (page-property related-entity [[${pageName}]]) )}}
+  - Related Decisions
+    - {{query (and (page-property form-type [[Form/Decision]]) (page-property related-entity [[${pageName}]]) )}}
+  - Related Notes
+    - {{query (and (page-property form-type [[Form/Note]]) (page-property related-entity [[${pageName}]]) )}}`;
+      };
+
+      LSS.findCandidateParents = async function(entity) {
+        const rule = LSS.PARENT_RULES[entity.name];
+
+        if (!rule) return [];
+        if (rule.defaultParent) return [rule.defaultParent];
+        if (!rule.parentEntityType) return [];
+
+        const blocks = await LSS.getPageBlocks(rule.parentEntityType);
+        const candidates = [];
+
+        function scan(items) {
+          for (const block of items || []) {
+            const refs = (block.content || "").match(/\[\[([^\]]+)\]\]/g) || [];
+
+            for (const ref of refs) {
+              const pageName = ref.replace("[[", "").replace("]]", "");
+
+              if (
+                pageName &&
+                !pageName.startsWith("Entity/") &&
+                !pageName.startsWith("Form/") &&
+                !pageName.startsWith("Templates/")
+              ) {
+                candidates.push(pageName);
+              }
+            }
+
+            if (block.children) scan(block.children);
+          }
+        }
+
+        scan(blocks);
+        return [...new Set(candidates)];
+      };
+
+      LSS.pickParent = async function(entity) {
+        const candidates = await LSS.findCandidateParents(entity);
+
+        if (candidates.length === 1) return candidates[0];
+
+        if (candidates.length > 1) {
+          const answer = prompt(
+            `Choose parent for ${entity.name}:\n\n${candidates
+              .map((p, i) => `${i + 1}. ${p}`)
+              .join("\n")}\n\nEnter number or exact page name:`
+          );
+
+          if (!answer) return "";
+
+          const index = Number(answer);
+
+          if (!Number.isNaN(index) && index >= 1 && index <= candidates.length) {
+            return candidates[index - 1];
+          }
+
+          return LSS.cleanName(answer);
+        }
+
+        const manual = prompt(`Enter parent page for ${entity.name}, or leave blank:`);
+        return manual ? LSS.cleanName(manual) : "";
+      };
+
+      LSS.buildSchema = async function() {
+        await LSS.ensurePage("Area");
+        await LSS.ensurePage("Entity");
+        await LSS.ensurePage("Form");
+        await LSS.ensurePage("Templates");
+
+        for (const area of LSS.REGISTRY.areas) {
+          await LSS.ensurePage(area.page, `type:: [[Area]]
+status:: active
+created-at:: ${LSS.nowISO()}
+
+- Related Entities
+  - {{query (page-property related-area [[${area.page}]])}}
+
+- Notes
+  -`);
+          await LSS.appendBlock("Area", `[[${area.page}]]`);
+        }
+
+        for (const entity of LSS.REGISTRY.entities) {
+          await LSS.ensurePage(entity.page, `type:: [[Entity-Type]]
+related-area:: [[${entity.area}]]
+template:: [[${entity.template}]]
+status:: active
+created-at:: ${LSS.nowISO()}
+
+- Definition
+  - ${entity.description}
+
+- Instances
+  - {{query (page-property entity-type [[${entity.page}]])}}
+
+- Notes
+  -`);
+          await LSS.appendBlock("Entity", `[[${entity.page}]] — ${entity.description}`);
+        }
+
+        for (const form of LSS.REGISTRY.forms) {
+          await LSS.ensurePage(form.page, `type:: [[Form-Type]]
+template:: [[${form.template}]]
+status:: active
+created-at:: ${LSS.nowISO()}
+
+- Instances
+  - {{query (page-property form-type [[${form.page}]])}}
+
+- Notes
+  -`);
+          await LSS.appendBlock("Form", `[[${form.page}]]`);
+        }
+
+        logseq.App.showMsg("LSS schema built");
+      };
+
+      LSS.createEntityInstance = async function(entityName, instanceName, parentOverride = "") {
+        const entity = LSS.REGISTRY.entities.find(
+          e => e.name.toLowerCase() === LSS.cleanName(entityName).toLowerCase()
+        );
+
+        if (!entity) {
+          logseq.App.showMsg(`Entity not found: ${entityName}`, "error");
+          return;
+        }
+
+        const instance = LSS.cleanName(instanceName);
+        const pageName = `${entity.name}/${instance}`;
+        const parentPage = parentOverride ? LSS.cleanName(parentOverride) : await LSS.pickParent(entity);
+        const expandedTemplate = await LSS.expandTemplate(entity.template);
+
+        const content = `type:: [[Entity]]
+entity-type:: [[${entity.page}]]
+related-area:: [[${entity.area}]]
+parent:: ${parentPage ? `[[${parentPage}]]` : ""}
+template:: [[${entity.template}]]
+status:: active
+created-at:: ${LSS.nowISO()}
+
+- Definition
+  - ${entity.description}
+
+- Context
+  - Area
+    - [[${entity.area}]]
+  - Entity Type
+    - [[${entity.page}]]
+  - Parent
+    - ${parentPage ? `[[${parentPage}]]` : ""}
+
+${LSS.entityQueries(pageName, entity.page, entity.area)}
+
+- Expanded Template
+${expandedTemplate}
+
+- Notes
+  -`;
+
+        await LSS.ensurePage(pageName, content);
+        await LSS.appendBlock(entity.page, `[[${pageName}]]`);
+
+        if (parentPage) {
+          await LSS.ensurePage(parentPage);
+
+          await LSS.appendBlock(parentPage, `- Child
+  - child:: [[${pageName}]]
+  - child-type:: [[${entity.page}]]
+  - registered-at:: ${LSS.nowISO()}`);
+
+          await logseq.App.showMsg(`Registered child on [[${parentPage}]]`);
+        }
+
+        await logseq.App.pushState("page", { name: pageName });
+        logseq.App.showMsg(`Created [[${pageName}]]`);
+      };
+
+      LSS.createFormInstance = async function(formName, instanceName, parentOverride = "") {
+        const form = LSS.REGISTRY.forms.find(
+          f => f.name.toLowerCase() === LSS.cleanName(formName).toLowerCase()
+        );
+
+        if (!form) {
+          logseq.App.showMsg(`Form not found: ${formName}`, "error");
+          return;
+        }
+
+        const instance = LSS.cleanName(instanceName);
+        const pageName = `${form.name}/${instance}`;
+        const relatedEntity = prompt("Related entity page? Example: Subject/AI. Leave blank if none:");
+        const relatedArea = prompt("Related area? Example: Area/Learning. Leave blank if none:");
+        const parentPage = parentOverride ? LSS.cleanName(parentOverride) : "";
+        const expandedTemplate = await LSS.expandTemplate(form.template);
+
+        const content = `type:: [[Form]]
+form-type:: [[${form.page}]]
+related-entity:: ${relatedEntity ? `[[${LSS.cleanName(relatedEntity)}]]` : ""}
+related-area:: ${relatedArea ? `[[${LSS.cleanName(relatedArea)}]]` : ""}
+parent:: ${parentPage ? `[[${LSS.cleanName(parentPage)}]]` : ""}
+template:: [[${form.template}]]
+status:: open
+created-at:: ${LSS.nowISO()}
+
+- Capture
+  -
+
+- Expanded Template
+${expandedTemplate}
+
+- Next Step
+  -`;
+
+        await LSS.ensurePage(pageName, content);
+        await LSS.appendBlock(form.page, `[[${pageName}]]`);
+
+        if (parentPage) {
+          await LSS.appendBlock(LSS.cleanName(parentPage), `Child:: [[${pageName}]]
+child-type:: [[${form.page}]]
+registered-at:: ${LSS.nowISO()}`);
+        }
+
+        await logseq.App.pushState("page", { name: pageName });
+        logseq.App.showMsg(`Created [[${pageName}]]`);
+      };
+
+
+      function showLSSPanel(mode) {
+        logseq.showMainUI();
+
+        const html = `
+          <div style="font-family: sans-serif; padding: 16px; width: 320px;">
+            <h2>LSS ${mode === "entity" ? "Entity" : "Form"} Creator</h2>
+
+            <label>Type</label>
+            <input id="lss-type" style="width:100%; margin:6px 0 12px 0;" placeholder="${mode === "entity" ? "Subject, Course, Project" : "Question, Insight, Decision"}" />
+
+            <label>Name</label>
+            <input id="lss-name" style="width:100%; margin:6px 0 12px 0;" placeholder="AI, AI Certifications, Best Question" />
+
+            <label>Parent</label>
+            <input id="lss-parent" style="width:100%; margin:6px 0 12px 0;" placeholder="Subject/AI, Area/Learning, Venture/My Business" />
+
+            <button id="lss-create" style="width:100%; padding:8px;">Create</button>
+            <button id="lss-close" style="width:100%; padding:8px; margin-top:8px;">Close</button>
+          </div>
+        `;
+
+        document.body.innerHTML = html;
+
+        document.getElementById("lss-close").onclick = () => {
+          logseq.hideMainUI();
+        };
+
+        document.getElementById("lss-create").onclick = async () => {
+          const type = document.getElementById("lss-type").value;
+          const name = document.getElementById("lss-name").value;
+          const parent = document.getElementById("lss-parent").value;
+
+          if (!type || !name) {
+            logseq.App.showMsg("Type and name are required", "error");
+            return;
+          }
+
+          if (mode === "entity") {
+            await LSS.createEntityInstance(type, name, parent);
+          } else {
+            await LSS.createFormInstance(type, name, parent);
+          }
+
+          logseq.hideMainUI();
+        };
+      }
+
+      function main() {
+        console.log("LSS GRAPH ENGINE READY");
+
+        logseq.App.showMsg("LSS Graph Engine Loaded");
+
+        logseq.App.registerCommandPalette(
+          { key: "lss-build-schema", label: "LSS: Build Schema" },
+          async () => await LSS.buildSchema()
+        );
+
+        logseq.App.registerCommandPalette(
+          { key: "lss-create-entity", label: "LSS: Create Entity Instance" },
+          async () => {
+            showLSSPanel("entity");
+          }
+        );
+
+        logseq.App.registerCommandPalette(
+          { key: "lss-create-form", label: "LSS: Create Form Instance" },
+          async () => {
+            showLSSPanel("form");
+          }
+        );
+      }
+
+      logseq.ready(main).catch(console.error);
+    </script>
+  </body>
+</html>
