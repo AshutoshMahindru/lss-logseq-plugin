@@ -302,48 +302,134 @@ ${expandedTemplate}
               parentPage
             );
 
-          let target;
+          let relatedBlock = null;
 
-          if(
-            parentBlocks &&
-            parentBlocks.length
-          ){
-            target =
-              parentBlocks[
-                parentBlocks.length-1
-              ].uuid;
+          for (const b of parentBlocks || []) {
+
+            if (
+              (b.content || "").trim() === "Related"
+            ) {
+              relatedBlock = b;
+              break;
+            }
+
           }
 
-          if(target){
+          if (!relatedBlock) {
 
-            await logseq.Editor.insertBlock(
-              target,
+            const lastBlock =
+              parentBlocks &&
+              parentBlocks.length
+                ? parentBlocks[parentBlocks.length - 1]
+                : null;
 
-              `Child:: [[${pageName}]]
-child-type:: [[${entity.page}]]
-registered-at:: ${LSS.nowISO()}`,
+            if (lastBlock) {
 
-              {
-                sibling:true
+              relatedBlock =
+                await logseq.Editor.insertBlock(
+                  lastBlock.uuid,
+                  "Related",
+                  {
+                    sibling: true
+                  }
+                );
+
+            } else {
+
+              await logseq.Editor.appendBlockInPage(
+                parentPage,
+                "Related"
+              );
+
+              const refreshed =
+                await logseq.Editor.getPageBlocksTree(
+                  parentPage
+                );
+
+              relatedBlock =
+                refreshed[
+                  refreshed.length - 1
+                ];
+
+            }
+
+          }
+
+          const entityTypeName =
+            entity.page
+              .split("/")
+              .pop();
+
+          const sectionName =
+            entityTypeName.endsWith("s")
+              ? entityTypeName
+              : entityTypeName + "s";
+
+          const refreshedBlocks =
+            await logseq.Editor.getPageBlocksTree(
+              parentPage
+            );
+
+          let sectionBlock = null;
+
+          function scan(items){
+
+            for(const i of items || []){
+
+              if(
+                (i.content || "").trim() === sectionName
+              ){
+                return i;
               }
 
-            );
+              const nested =
+                scan(i.children);
 
-          }else{
+              if(nested)
+                return nested;
 
-            await logseq.Editor.appendBlockInPage(
-              parentPage,
+            }
 
-              `Child:: [[${pageName}]]
-child-type:: [[${entity.page}]]
-registered-at:: ${LSS.nowISO()}`
-
-            );
+            return null;
 
           }
 
+          sectionBlock =
+            scan(refreshedBlocks);
+
+          if(!sectionBlock){
+
+            sectionBlock =
+              await logseq.Editor.insertBlock(
+                relatedBlock.uuid,
+                sectionName,
+                {
+                  sibling:false
+                }
+              );
+
+          }
+
+          await logseq.Editor.insertBlock(
+
+            sectionBlock.uuid,
+
+            `[[${pageName}]]
+
+child-type:: [[${entity.page}]]
+
+created-at:: ${LSS.nowISO()}
+
+template:: [[${entity.template}]]`,
+
+            {
+              sibling:false
+            }
+
+          );
+
           await logseq.App.showMsg(
-            `Child registered on ${parentPage}`
+            `Added ${pageName} under ${sectionName}`
           );
 
         }
