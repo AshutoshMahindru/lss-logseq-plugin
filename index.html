@@ -1,648 +1,819 @@
 <!doctype html>
 <html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>LSS Graph Engine</title>
+
+    <style>
+
+      body{
+        margin:0;
+        background:transparent;
+        font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;
+      }
+
+    </style>
+
+  </head>
+
   <body>
-    <h1>LSS Graph Engine Loaded</h1>
 
     <script src="https://cdn.jsdelivr.net/npm/@logseq/libs/dist/lsplugin.user.js"></script>
 
     <script>
-      const LSS = {};
+
+      window.LSS = window.LSS || {};
 
       LSS.REGISTRY = {
-        areas: [
-          { name: "Learning", page: "Area/Learning" },
-          { name: "Health", page: "Area/Health" },
-          { name: "Work", page: "Area/Work" },
-          { name: "Pursuits", page: "Area/Pursuits" }
-        ],
-
         entities: [
-          { name: "Subject", page: "Entity/Subject", area: "Area/Learning", template: "Templates/subject", description: "Knowledge domain" },
-          { name: "Course", page: "Entity/Course", area: "Area/Learning", template: "Templates/course", description: "Structured learning program" },
-          { name: "Lesson", page: "Entity/Lesson", area: "Area/Learning", template: "Templates/lesson", description: "Discrete learning session" },
-          { name: "Concept", page: "Entity/Concept", area: "Area/Learning", template: "Templates/concept", description: "Specific idea within a subject" },
-          { name: "Skill", page: "Entity/Skill", area: "Area/Learning", template: "Templates/skill", description: "Capability being built" },
-
-          { name: "Venture", page: "Entity/Venture", area: "Area/Work", template: "Templates/venture", description: "Business you own/run" },
-          { name: "Function", page: "Entity/Function", area: "Area/Work", template: "Templates/function", description: "Business function" },
-          { name: "Project", page: "Entity/Project", area: "Area/Work", template: "Templates/project", description: "Bounded effort" },
-          { name: "Organisation", page: "Entity/Organisation", area: "Area/Work", template: "Templates/organisation", description: "Organisation" },
-          { name: "Person", page: "Entity/Person", area: "Cross-Cutting", template: "Templates/person", description: "Individual human" },
-          { name: "Document", page: "Entity/Document", area: "Cross-Cutting", template: "Templates/document", description: "Document" },
-          { name: "Notebook", page: "Entity/Notebook", area: "Cross-Cutting", template: "Templates/notebook", description: "Curated thematic collection" }
+          {
+            name:"Subject",
+            page:"Entity/Subject",
+            area:"Area/Learning",
+            template:"Templates/subject"
+          },
+          {
+            name:"Course",
+            page:"Entity/Course",
+            area:"Area/Learning",
+            template:"Templates/course"
+          },
+          {
+            name:"Lesson",
+            page:"Entity/Lesson",
+            area:"Area/Learning",
+            template:"Templates/lesson"
+          },
+          {
+            name:"Project",
+            page:"Entity/Project",
+            area:"Area/Work",
+            template:"Templates/project"
+          }
         ],
 
         forms: [
-          { name: "Question", page: "Form/Question", template: "Templates/question" },
-          { name: "Insight", page: "Form/Insight", template: "Templates/insight" },
-          { name: "Decision", page: "Form/Decision", template: "Templates/decision" },
-          { name: "Idea", page: "Form/Idea", template: "Templates/idea" },
-          { name: "Note", page: "Form/Note", template: "Templates/note" },
-          { name: "Action-Item", page: "Form/Action-Item", template: "Templates/action-item" }
+          {
+            name:"Question",
+            page:"Form/Question",
+            template:"Templates/question"
+          },
+          {
+            name:"Insight",
+            page:"Form/Insight",
+            template:"Templates/insight"
+          }
         ]
       };
 
-      LSS.PARENT_RULES = {
-        Subject: { defaultParent: "Area/Learning" },
-        Course: { parentEntityType: "Entity/Subject" },
-        Lesson: { parentEntityType: "Entity/Course" },
-        Concept: { parentEntityType: "Entity/Subject" },
-        Skill: { parentEntityType: "Entity/Subject" },
-        Venture: { defaultParent: "Area/Work" },
-        Function: { parentEntityType: "Entity/Venture" },
-        Project: { parentEntityType: "Entity/Venture" },
-        Organisation: { defaultParent: "Area/Work" },
-        Document: { parentEntityType: "Entity/Project" },
-        Notebook: { defaultParent: "Area/Learning" }
+      LSS.nowISO = function(){
+        return new Date().toISOString();
       };
 
-      LSS.nowISO = () => new Date().toISOString();
+      LSS.cleanName = function(name){
 
-      LSS.cleanName = function(name) {
         return String(name || "")
           .trim()
-          .replaceAll("[[", "")
-          .replaceAll("]]", "")
-          .replace(/#/g, "")
-          .replace(/\s+/g, " ");
+          .replaceAll("[[","")
+          .replaceAll("]]","");
+
       };
 
-      LSS.ensurePage = async function(pageName, content = "") {
-        let page = await logseq.Editor.getPage(pageName);
+      
 
-        if (!page) {
-          await logseq.Editor.createPage(pageName, {}, { redirect: false });
+      LSS.extractWikiRefs = function(text){
+
+        const refs = [];
+        const re = /\[\[([^\]]+)\]\]/g;
+        let m;
+
+        while((m = re.exec(text || ""))){
+          refs.push(m[1]);
         }
 
-        if (content) {
-          await logseq.Editor.appendBlockInPage(pageName, content);
-        }
+        return refs;
+
       };
 
-      LSS.appendBlock = async function(pageName, content) {
-        await LSS.ensurePage(pageName);
-        await logseq.Editor.appendBlockInPage(pageName, content);
+      LSS.toEntityName = function(entityPage){
+
+        return String(entityPage || "")
+          .replace("Entity/","")
+          .trim();
+
       };
 
-      LSS.getPageBlocks = async function(pageName) {
-        try {
-          return await logseq.Editor.getPageBlocksTree(pageName) || [];
-        } catch (e) {
-          return [];
-        }
+      LSS.toTemplatePage = function(entityName){
+
+        return "Templates/" +
+          String(entityName || "")
+            .toLowerCase()
+            .replace(/\s+/g,"-");
+
       };
 
-      LSS.blockTreeToMarkdown = function(blocks, depth = 0) {
-        let output = "";
+      LSS.readEntityHierarchyFromPage =
+        async function(){
 
-        for (const block of blocks || []) {
-          const indent = "  ".repeat(depth);
-          output += `${indent}- ${block.content || ""}\n`;
+          const pageName = "Entity-Page";
 
-          if (block.children && block.children.length) {
-            output += LSS.blockTreeToMarkdown(block.children, depth + 1);
-          }
-        }
-
-        return output;
-      };
-
-      LSS.expandTemplate = async function(templatePage) {
-        const blocks = await LSS.getPageBlocks(templatePage);
-
-        if (!blocks.length) {
-          return `- Template Missing
-  - Add content to [[${templatePage}]]`;
-        }
-
-        return LSS.blockTreeToMarkdown(blocks);
-      };
-
-      LSS.entityQueries = function(pageName, entityPage, areaPage) {
-        return `- Graph Queries
-  - Children / Downstream
-    - {{query (property parent [[${pageName}]])}}
-  - Same Entity Type
-    - {{query (page-property entity-type [[${entityPage}]])}}
-  - Same Area
-    - {{query (page-property related-area [[${areaPage}]])}}
-  - Related Questions
-    - {{query (and (page-property form-type [[Form/Question]]) (page-property related-entity [[${pageName}]]) )}}
-  - Related Decisions
-    - {{query (and (page-property form-type [[Form/Decision]]) (page-property related-entity [[${pageName}]]) )}}
-  - Related Notes
-    - {{query (and (page-property form-type [[Form/Note]]) (page-property related-entity [[${pageName}]]) )}}`;
-      };
-
-      LSS.findCandidateParents = async function(entity) {
-        const rule = LSS.PARENT_RULES[entity.name];
-
-        if (!rule) return [];
-        if (rule.defaultParent) return [rule.defaultParent];
-        if (!rule.parentEntityType) return [];
-
-        const blocks = await LSS.getPageBlocks(rule.parentEntityType);
-        const candidates = [];
-
-        function scan(items) {
-          for (const block of items || []) {
-            const refs = (block.content || "").match(/\[\[([^\]]+)\]\]/g) || [];
-
-            for (const ref of refs) {
-              const pageName = ref.replace("[[", "").replace("]]", "");
-
-              if (
-                pageName &&
-                !pageName.startsWith("Entity/") &&
-                !pageName.startsWith("Form/") &&
-                !pageName.startsWith("Templates/")
-              ) {
-                candidates.push(pageName);
-              }
-            }
-
-            if (block.children) scan(block.children);
-          }
-        }
-
-        scan(blocks);
-        return [...new Set(candidates)];
-      };
-
-      LSS.pickParent = async function(entity) {
-        const candidates = await LSS.findCandidateParents(entity);
-
-        if (candidates.length === 1) return candidates[0];
-
-        if (candidates.length > 1) {
-          const answer = prompt(
-            `Choose parent for ${entity.name}:\n\n${candidates
-              .map((p, i) => `${i + 1}. ${p}`)
-              .join("\n")}\n\nEnter number or exact page name:`
-          );
-
-          if (!answer) return "";
-
-          const index = Number(answer);
-
-          if (!Number.isNaN(index) && index >= 1 && index <= candidates.length) {
-            return candidates[index - 1];
-          }
-
-          return LSS.cleanName(answer);
-        }
-
-        const manual = prompt(`Enter parent page for ${entity.name}, or leave blank:`);
-        return manual ? LSS.cleanName(manual) : "";
-      };
-
-      LSS.buildSchema = async function() {
-        await LSS.ensurePage("Area");
-        await LSS.ensurePage("Entity");
-        await LSS.ensurePage("Form");
-        await LSS.ensurePage("Templates");
-
-        for (const area of LSS.REGISTRY.areas) {
-          await LSS.ensurePage(area.page, `type:: [[Area]]
-status:: active
-created-at:: ${LSS.nowISO()}
-
-- Related Entities
-  - {{query (page-property related-area [[${area.page}]])}}
-
-- Notes
-  -`);
-          await LSS.appendBlock("Area", `[[${area.page}]]`);
-        }
-
-        for (const entity of LSS.REGISTRY.entities) {
-          await LSS.ensurePage(entity.page, `type:: [[Entity-Type]]
-related-area:: [[${entity.area}]]
-template:: [[${entity.template}]]
-status:: active
-created-at:: ${LSS.nowISO()}
-
-- Definition
-  - ${entity.description}
-
-- Instances
-  - {{query (page-property entity-type [[${entity.page}]])}}
-
-- Notes
-  -`);
-          await LSS.appendBlock("Entity", `[[${entity.page}]] — ${entity.description}`);
-        }
-
-        for (const form of LSS.REGISTRY.forms) {
-          await LSS.ensurePage(form.page, `type:: [[Form-Type]]
-template:: [[${form.template}]]
-status:: active
-created-at:: ${LSS.nowISO()}
-
-- Instances
-  - {{query (page-property form-type [[${form.page}]])}}
-
-- Notes
-  -`);
-          await LSS.appendBlock("Form", `[[${form.page}]]`);
-        }
-
-        logseq.App.showMsg("LSS schema built");
-      };
-
-      LSS.createEntityInstance = async function(entityName, instanceName, parentOverride = "") {
-        const entity = LSS.REGISTRY.entities.find(
-          e => e.name.toLowerCase() === LSS.cleanName(entityName).toLowerCase()
-        );
-
-        if (!entity) {
-          logseq.App.showMsg(`Entity not found: ${entityName}`, "error");
-          return;
-        }
-
-        const instance = LSS.cleanName(instanceName);
-        const pageName = `${entity.name}/${instance}`;
-        const parentPage = parentOverride ? LSS.cleanName(parentOverride) : await LSS.pickParent(entity);
-        const expandedTemplate = await LSS.expandTemplate(entity.template);
-
-        const content = `type:: [[Entity]]
-entity-type:: [[${entity.page}]]
-related-area:: [[${entity.area}]]
-parent:: ${parentPage ? `[[${parentPage}]]` : ""}
-template:: [[${entity.template}]]
-status:: active
-created-at:: ${LSS.nowISO()}
-
-- Definition
-  - ${entity.description}
-
-- Context
-  - Area
-    - [[${entity.area}]]
-  - Entity Type
-    - [[${entity.page}]]
-  - Parent
-    - ${parentPage ? `[[${parentPage}]]` : ""}
-
-${LSS.entityQueries(pageName, entity.page, entity.area)}
-
-- Expanded Template
-${expandedTemplate}
-
-- Notes
-  -`;
-
-        await LSS.ensurePage(pageName, content);
-        await LSS.appendBlock(entity.page, `[[${pageName}]]`);
-
-        if (parentPage) {
-
-          const parentBlocks =
+          const blocks =
             await logseq.Editor.getPageBlocksTree(
-              parentPage
+              pageName
             );
 
-          let relatedBlock = null;
+          const entities = [];
+          const parentRules = {};
+          const crossCutting = [];
 
-          for (const b of parentBlocks || []) {
+          function walk(items, context){
 
-            if (
-              (b.content || "").trim() === "Related"
-            ) {
-              relatedBlock = b;
-              break;
-            }
+            for(const block of items || []){
 
-          }
+              const content =
+                block.content || "";
 
-          if (!relatedBlock) {
+              const refs =
+                LSS.extractWikiRefs(content);
 
-            const lastBlock =
-              parentBlocks &&
-              parentBlocks.length
-                ? parentBlocks[parentBlocks.length - 1]
-                : null;
+              const isCross =
+                /cross[- ]cutting|cross cutting/i
+                  .test(content) ||
+                context.crossCutting;
 
-            if (lastBlock) {
+              const areaRef =
+                refs.find(
+                  r => r.startsWith("Area/")
+                ) || context.area;
 
-              relatedBlock =
-                await logseq.Editor.insertBlock(
-                  lastBlock.uuid,
-                  "Related",
-                  {
-                    sibling: true
-                  }
+              const entityRef =
+                refs.find(
+                  r => r.startsWith("Entity/")
                 );
 
-            } else {
+              let nextContext = {
+                area: areaRef,
+                entity: context.entity,
+                crossCutting: isCross
+              };
 
-              await logseq.Editor.appendBlockInPage(
-                parentPage,
-                "Related"
-              );
+              if(entityRef){
 
-              const refreshed =
-                await logseq.Editor.getPageBlocksTree(
-                  parentPage
-                );
+                const entityName =
+                  LSS.toEntityName(entityRef);
 
-              relatedBlock =
-                refreshed[
-                  refreshed.length - 1
-                ];
+                const item = {
+                  name: entityName,
+                  page: entityRef,
+                  area: areaRef || "Area/Cross-Cutting",
+                  template: LSS.toTemplatePage(entityName),
+                  crossCutting: isCross
+                };
 
-            }
-
-          }
-
-          const entityTypeName =
-            entity.page
-              .split("/")
-              .pop();
-
-          const sectionName =
-            entityTypeName.endsWith("s")
-              ? entityTypeName
-              : entityTypeName + "s";
-
-          const refreshedBlocks =
-            await logseq.Editor.getPageBlocksTree(
-              parentPage
-            );
-
-          let sectionBlock = null;
-
-          function scan(items){
-
-            for(const i of items || []){
-
-              if(
-                (i.content || "").trim() === sectionName
-              ){
-                return i;
-              }
-
-              const nested =
-                scan(i.children);
-
-              if(nested)
-                return nested;
-
-            }
-
-            return null;
-
-          }
-
-          sectionBlock =
-            scan(refreshedBlocks);
-
-          if(!sectionBlock){
-
-            sectionBlock =
-              await logseq.Editor.insertBlock(
-                relatedBlock.uuid,
-                sectionName,
-                {
-                  sibling:false
+                if(
+                  !entities.find(
+                    e => e.page === item.page
+                  )
+                ){
+                  entities.push(item);
                 }
+
+                if(isCross){
+                  crossCutting.push(entityName);
+                }
+
+                if(context.entity){
+
+                  parentRules[entityName] =
+                    parentRules[entityName] || {
+                      parents: []
+                    };
+
+                  parentRules[entityName]
+                    .parents
+                    .push(context.entity);
+
+                }else if(areaRef){
+
+                  parentRules[entityName] =
+                    parentRules[entityName] || {
+                      parents: []
+                    };
+
+                  parentRules[entityName]
+                    .parents
+                    .push(areaRef);
+
+                }
+
+                nextContext.entity =
+                  entityRef;
+
+              }
+
+              walk(
+                block.children || [],
+                nextContext
               );
 
-          }
-
-          await logseq.Editor.insertBlock(
-
-            sectionBlock.uuid,
-
-            `[[${pageName}]]
-
-child-type:: [[${entity.page}]]
-
-created-at:: ${LSS.nowISO()}
-
-template:: [[${entity.template}]]`,
-
-            {
-              sibling:false
             }
 
-          );
+          }
 
-          await logseq.App.showMsg(
-            `Added ${pageName} under ${sectionName}`
-          );
+          walk(blocks, {
+            area:"",
+            entity:"",
+            crossCutting:false
+          });
 
-        }
+          for(const key of Object.keys(parentRules)){
 
-        await logseq.App.pushState("page", { name: pageName });
-        logseq.App.showMsg(`Created [[${pageName}]]`);
+            parentRules[key].parents =
+              [...new Set(parentRules[key].parents)];
+
+          }
+
+          if(entities.length){
+
+            LSS.REGISTRY.entities = entities;
+            LSS.DYNAMIC_PARENT_RULES = parentRules;
+            LSS.CROSS_CUTTING_ENTITY_TYPES =
+              [...new Set(crossCutting)];
+
+            console.log(
+              "LSS dynamic entity schema loaded",
+              entities,
+              parentRules
+            );
+
+          }
+
+          return {
+            entities,
+            parentRules,
+            crossCutting
+          };
+
       };
 
-      LSS.createFormInstance = async function(formName, instanceName, parentOverride = "") {
-        const form = LSS.REGISTRY.forms.find(
-          f => f.name.toLowerCase() === LSS.cleanName(formName).toLowerCase()
-        );
+      LSS.findEntityInstancesByType =
+        async function(entityPage){
 
-        if (!form) {
-          logseq.App.showMsg(`Form not found: ${formName}`, "error");
-          return;
-        }
+          try{
 
-        const instance = LSS.cleanName(instanceName);
-        const pageName = `${form.name}/${instance}`;
-        const relatedEntity = prompt("Related entity page? Example: Subject/AI. Leave blank if none:");
-        const relatedArea = prompt("Related area? Example: Area/Learning. Leave blank if none:");
-        const parentPage = parentOverride ? LSS.cleanName(parentOverride) : "";
-        const expandedTemplate = await LSS.expandTemplate(form.template);
+            const prefix =
+              entityPage.replace("Entity/","")
+                .toLowerCase() + "/";
 
-        const content = `type:: [[Form]]
-form-type:: [[${form.page}]]
-related-entity:: ${relatedEntity ? `[[${LSS.cleanName(relatedEntity)}]]` : ""}
-related-area:: ${relatedArea ? `[[${LSS.cleanName(relatedArea)}]]` : ""}
-parent:: ${parentPage ? `[[${LSS.cleanName(parentPage)}]]` : ""}
-template:: [[${form.template}]]
-status:: open
-created-at:: ${LSS.nowISO()}
+            const result =
+              await logseq.DB.datascriptQuery(`
+                [:find ?name
+                 :where
+                 [?b :block/name ?name]
+                 [(clojure.string/starts-with? ?name "${prefix}")]]
+              `);
 
-- Capture
-  -
+            return (result || [])
+              .map(x => x[0])
+              .filter(Boolean)
+              .sort();
 
-- Expanded Template
-${expandedTemplate}
+          }catch(e){
 
-- Next Step
-  -`;
+            console.error(
+              "findEntityInstancesByType failed",
+              e
+            );
 
-        await LSS.ensurePage(pageName, content);
-        await LSS.appendBlock(form.page, `[[${pageName}]]`);
+            return [];
 
-        if (parentPage) {
-          await LSS.appendBlock(LSS.cleanName(parentPage), `Child:: [[${pageName}]]
-child-type:: [[${form.page}]]
-registered-at:: ${LSS.nowISO()}`);
-        }
+          }
 
-        await logseq.App.pushState("page", { name: pageName });
-        logseq.App.showMsg(`Created [[${pageName}]]`);
       };
 
 
-      function showLSSPanel(mode) {
-        logseq.showMainUI();
 
-        const html = `
-          <div style="font-family: sans-serif; padding: 16px; width: 320px;">
-            <h2>LSS ${mode === "entity" ? "Entity" : "Form"} Creator</h2>
+      LSS.toEntityName =
+        function(entityPage){
 
-            <label>Type</label>
-            <input id="lss-type" style="width:100%; margin:6px 0 12px 0;" placeholder="${mode === "entity" ? "Subject, Course, Project" : "Question, Insight, Decision"}" />
+          return String(entityPage || "")
+            .replace("Entity-Page/","")
+            .replace("Entity/","")
+            .trim();
 
-            <label>Name</label>
-            <input id="lss-name" style="width:100%; margin:6px 0 12px 0;" placeholder="AI, AI Certifications, Best Question" />
+      };
 
-            <label>Parent</label>
-            <input id="lss-parent" style="width:100%; margin:6px 0 12px 0;" placeholder="Subject/AI, Area/Learning, Venture/My Business" />
+      LSS.toTemplatePage =
+        function(entityName){
 
-            <button id="lss-create" style="width:100%; padding:8px;">Create</button>
-            <button id="lss-close" style="width:100%; padding:8px; margin-top:8px;">Close</button>
-          </div>
-        `;
+          return "Templates/" +
+            String(entityName || "")
+              .toLowerCase()
+              .replace(/\s+/g,"-");
 
-        document.body.innerHTML = html;
+      };
 
-        document.getElementById("lss-close").onclick = () => {
-          logseq.hideMainUI();
+      LSS.parseExistingEntityPageSchema =
+        async function(){
+
+          const blocks =
+            await logseq.Editor.getPageBlocksTree(
+              "Entity-Page"
+            );
+
+          const entities = [];
+          const parentRules = {};
+          const crossCuttingNames = new Set();
+
+          function extractRefs(text){
+
+            const refs = [];
+            const re = /\[\[([^\]]+)\]\]/g;
+            let m;
+
+            while((m = re.exec(text || ""))){
+              refs.push(m[1]);
+            }
+
+            return refs;
+
+          }
+
+          function walk(items, ctx){
+
+            for(const block of items || []){
+
+              const content =
+                block.content || "";
+
+              const refs =
+                extractRefs(content);
+
+              const area =
+                refs.find(
+                  r => r.startsWith("Area/")
+                ) || ctx.area || "";
+
+              const entityPage =
+                refs.find(
+                  r => r.startsWith("Entity-Page/")
+                );
+
+              const isCross =
+                /Cross-Cutting|cross-cutting|Cross Cutting/i
+                  .test(content) ||
+                ctx.crossCutting;
+
+              let nextCtx = {
+                area,
+                parentEntity: ctx.parentEntity,
+                crossCutting: isCross
+              };
+
+              if(entityPage){
+
+                const name =
+                  LSS.toEntityName(entityPage);
+
+                const entity = {
+                  name,
+                  page: entityPage,
+                  area: area || "Cross-Cutting",
+                  template: LSS.toTemplatePage(name),
+                  crossCutting: isCross
+                };
+
+                if(!entities.find(e => e.name === name)){
+                  entities.push(entity);
+                }
+
+                parentRules[name] =
+                  parentRules[name] || {
+                    parents: []
+                  };
+
+                if(isCross){
+
+                  crossCuttingNames.add(name);
+
+                  parentRules[name].parents.push(
+                    "Area/Health",
+                    "Area/Wealth",
+                    "Area/Learning",
+                    "Area/Family",
+                    "Area/Friends",
+                    "Area/Work",
+                    "Area/Pursuits"
+                  );
+
+                }else if(ctx.parentEntity){
+
+                  parentRules[name].parents.push(
+                    ctx.parentEntity
+                  );
+
+                }else if(area){
+
+                  parentRules[name].parents.push(
+                    area
+                  );
+
+                }
+
+                nextCtx.parentEntity =
+                  entityPage;
+
+              }
+
+              walk(
+                block.children || [],
+                nextCtx
+              );
+
+            }
+
+          }
+
+          walk(blocks, {
+            area:"",
+            parentEntity:"",
+            crossCutting:false
+          });
+
+          for(const key of Object.keys(parentRules)){
+            parentRules[key].parents =
+              [...new Set(parentRules[key].parents)];
+          }
+
+          if(entities.length){
+
+            LSS.REGISTRY.entities =
+              entities;
+
+            LSS.DYNAMIC_PARENT_RULES =
+              parentRules;
+
+            LSS.CROSS_CUTTING_ENTITY_TYPES =
+              [...crossCuttingNames];
+
+            console.log(
+              "RIGHT: parsed Entity-Page schema",
+              LSS.REGISTRY.entities,
+              LSS.DYNAMIC_PARENT_RULES,
+              LSS.CROSS_CUTTING_ENTITY_TYPES
+            );
+
+          }else{
+
+            console.warn(
+              "WRONG: Entity-Page schema parsed zero entities"
+            );
+
+          }
+
+          return {
+            entities,
+            parentRules,
+            crossCutting:[...crossCuttingNames]
+          };
+
+      };
+
+
+      LSS.PARENT_RULES = {
+        Subject: {
+          fallback: "Area/Learning",
+          parentPrefix: "area/"
+        },
+        Course: {
+          fallback: "",
+          parentPrefix: "subject/"
+        },
+        Lesson: {
+          fallback: "",
+          parentPrefix: "course/"
+        },
+        Project: {
+          fallback: "Area/Work",
+          parentPrefix: "area/"
+        }
+      };
+
+      LSS.findPagesByPrefix =
+        async function(prefix){
+
+          try{
+
+            const result =
+              await logseq.DB.datascriptQuery(`
+                [:find ?name
+                 :where
+                 [?b :block/name ?name]
+                 [(clojure.string/starts-with? ?name "${prefix}")]]
+              `);
+
+            return (result || [])
+              .map(x => x[0])
+              .filter(Boolean)
+              .sort();
+
+          }catch(e){
+
+            console.error("findPagesByPrefix failed", e);
+            return [];
+
+          }
+
         };
 
-        document.getElementById("lss-create").onclick = async () => {
-          const type = document.getElementById("lss-type").value;
-          const name = document.getElementById("lss-name").value;
-          const parent = document.getElementById("lss-parent").value;
 
-          if (!type || !name) {
-            logseq.App.showMsg("Type and name are required", "error");
-            return;
+
+      LSS.findEntityInstancesByType =
+        async function(entityPage){
+
+          const typeName =
+            LSS.toEntityName(entityPage);
+
+          const prefix =
+            typeName.toLowerCase() + "/";
+
+          try{
+
+            const result =
+              await logseq.DB.datascriptQuery(`
+                [:find ?name
+                 :where
+                 [?b :block/name ?name]
+                 [(clojure.string/starts-with? ?name "${prefix}")]]
+              `);
+
+            return (result || [])
+              .map(x => x[0])
+              .filter(Boolean)
+              .sort();
+
+          }catch(e){
+
+            console.error(
+              "WRONG: findEntityInstancesByType failed",
+              e
+            );
+
+            return [];
+
           }
-
-          if (mode === "entity") {
-            await LSS.createEntityInstance(type, name, parent);
-          } else {
-            await LSS.createFormInstance(type, name, parent);
-          }
-
-          logseq.hideMainUI();
-        };
-      }
-
-      function main() {
-        console.log("LSS GRAPH ENGINE READY");
-
-        logseq.App.showMsg("LSS Graph Engine Loaded");
-
-        logseq.App.registerCommandPalette(
-          { key: "lss-build-schema", label: "LSS: Build Schema" },
-          async () => await LSS.buildSchema()
-        );
-
-        logseq.App.registerCommandPalette(
-          { key: "lss-create-entity", label: "LSS: Create Entity Instance" },
-          async () => {
-            showLSSPanel("entity");
-          }
-        );
-
-        logseq.App.registerCommandPalette(
-          { key: "lss-create-form", label: "LSS: Create Form Instance" },
-          async () => {
-            showLSSPanel("form");
-          }
-        );
-      }
-
-      logseq.ready(main).catch(console.error);
-    </script>
-  </body>
-</html>
-      LSS.findExistingPage = async function(pageName){
-
-        const page =
-          await logseq.Editor.getPage(
-            pageName
-          );
-
-        return !!page;
 
       };
 
-      LSS.findAllowedParents = async function(typeName){
+      LSS.findCandidateParents =
+        async function(entity){
 
-        const entity =
-          LSS.REGISTRY.entities.find(
-            e => e.name === typeName
-          );
+          if(!entity)
+            return [];
 
-        if(!entity)
-          return [];
+          await LSS.parseExistingEntityPageSchema();
 
-        return await LSS.findCandidateParents(
-          entity
-        );
+          const rule =
+            (LSS.DYNAMIC_PARENT_RULES || {})[
+              entity.name
+            ];
+
+          const parents = [];
+
+          for(const parent of (rule && rule.parents) || []){
+
+            if(parent.startsWith("Area/")){
+
+              parents.push(parent);
+
+            }else if(parent.startsWith("Entity-Page/")){
+
+              const instances =
+                await LSS.findEntityInstancesByType(
+                  parent
+                );
+
+              parents.push(...instances);
+
+            }
+
+          }
+
+          return [...new Set(parents)].sort();
 
       };
 
-      LSS.renderRelationshipPreview = function(
-        typeName,
-        parentName,
-        objectName
-      ){
+      LSS.findExistingPage =
+        async function(pageName){
 
-        if(
-          !typeName ||
-          !objectName
-        ) return "";
+          const p =
+            await logseq.Editor.getPage(
+              pageName
+            );
 
-        const plural =
-          typeName.endsWith("s")
-            ? typeName
-            : typeName + "s";
+          return !!p;
 
-        return `
-${parentName || "Parent"}
-  └── Related
-      └── ${plural}
-          └── ${typeName}/${objectName}
+      };
+
+      LSS.expandTemplate =
+        async function(templateName){
+
+          return `
+- Objective
+- Notes
+- Tasks
 `;
 
       };
 
-      LSS.showCreatorPanel = async function(mode) {
+      LSS.createEntityInstance =
+        async function(type,name,parent){
 
-        logseq.showMainUI();
+          const entity =
+            LSS.REGISTRY.entities.find(
+              e => e.name === type
+            );
 
-        const types =
-          mode === "entity"
-            ? LSS.REGISTRY.entities
-            : LSS.REGISTRY.forms;
+          const pageName =
+            `${type}/${name}`;
 
-        const grouped = {};
+          const content = `
+type:: [[Entity]]
+entity-type:: [[${entity.page}]]
+related-area:: [[${entity.area}]]
+parent:: ${parent ? `[[${parent}]]` : ""}
+template:: [[${entity.template}]]
+created-at:: ${LSS.nowISO()}
 
-        for(const t of types){
+- Overview
 
-          const area =
-            t.area || "Forms";
+- Related
 
-          grouped[area] =
-            grouped[area] || [];
+- Notes
+`;
 
-          grouped[area].push(t);
+          await logseq.Editor.createPage(
+            pageName,
+            {},
+            {
+              createFirstBlock:true
+            }
+          );
 
-        }
+          const blocks =
+            await logseq.Editor.getPageBlocksTree(
+              pageName
+            );
 
-        const options =
-          Object.entries(grouped)
-            .map(([group,items])=>{
+          if(blocks && blocks.length){
 
-              return `
+            await logseq.Editor.updateBlock(
+              blocks[0].uuid,
+              content
+            );
+
+          }
+
+          if(parent){
+
+            const parentBlocks =
+              await logseq.Editor.getPageBlocksTree(
+                parent
+              );
+
+            let relatedBlock = null;
+
+            for(const b of parentBlocks || []){
+
+              if(
+                (b.content || "").trim() === "Related"
+              ){
+                relatedBlock = b;
+              }
+
+            }
+
+            if(!relatedBlock){
+
+              relatedBlock =
+                await logseq.Editor.insertBlock(
+                  parentBlocks[
+                    parentBlocks.length - 1
+                  ].uuid,
+                  "Related",
+                  {
+                    sibling:true
+                  }
+                );
+
+            }
+
+            const plural =
+              type.endsWith("s")
+                ? type
+                : type + "s";
+
+            const refreshed =
+              await logseq.Editor.getPageBlocksTree(
+                parent
+              );
+
+            let typeBlock = null;
+
+            function scan(items){
+
+              for(const i of items || []){
+
+                if(
+                  (i.content || "").trim() === plural
+                ){
+                  return i;
+                }
+
+                const nested =
+                  scan(i.children);
+
+                if(nested)
+                  return nested;
+
+              }
+
+              return null;
+
+            }
+
+            typeBlock =
+              scan(refreshed);
+
+            if(!typeBlock){
+
+              typeBlock =
+                await logseq.Editor.insertBlock(
+                  relatedBlock.uuid,
+                  plural,
+                  {
+                    sibling:false
+                  }
+                );
+
+            }
+
+            await logseq.Editor.insertBlock(
+              typeBlock.uuid,
+              `[[${pageName}]]`,
+              {
+                sibling:false
+              }
+            );
+
+          }
+
+          await logseq.App.pushState(
+            "page",
+            {
+              name:pageName
+            }
+          );
+
+      };
+
+      LSS.showCreatorPanel =
+        async function(mode){
+
+          logseq.showMainUI();
+
+          if(mode === "entity"){
+            await LSS.readEntityHierarchyFromPage();
+          }
+
+          if(mode === "entity"){
+            await LSS.parseExistingEntityPageSchema();
+          }
+
+          const types =
+            mode === "entity"
+              ? LSS.REGISTRY.entities
+              : LSS.REGISTRY.forms;
+
+          const grouped = {};
+
+          for(const t of types){
+
+            const area =
+              t.area || "Forms";
+
+            grouped[area] =
+              grouped[area] || [];
+
+            grouped[area].push(t);
+
+          }
+
+          const options =
+            Object.entries(grouped)
+              .map(([group,items])=>{
+
+                return `
 <optgroup label="${group}">
 ${
   items.map(
@@ -654,17 +825,11 @@ ${i.name}
 </optgroup>
 `;
 
-            }).join("");
+              }).join("");
 
-        document.body.innerHTML = `
+          document.body.innerHTML = `
 
 <style>
-
-body{
-margin:0;
-background:transparent;
-font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;
-}
 
 .lss-shell{
 position:fixed;
@@ -702,11 +867,6 @@ overflow:auto;
 border-left:1px solid #e5e7eb;
 }
 
-h1{
-font-size:22px;
-margin:0 0 24px 0;
-}
-
 label{
 display:block;
 font-size:12px;
@@ -738,27 +898,13 @@ overflow:auto;
 margin-bottom:18px;
 }
 
-.warning{
-color:#dc2626;
-font-weight:700;
-margin-top:-10px;
-margin-bottom:18px;
-display:none;
-}
-
-.buttons{
-display:flex;
-gap:12px;
-margin-top:24px;
-}
-
 button{
-flex:1;
 padding:14px;
 border-radius:12px;
 font-weight:700;
 border:0;
 cursor:pointer;
+width:100%;
 }
 
 .primary{
@@ -766,37 +912,13 @@ background:#2563eb;
 color:white;
 }
 
-.secondary{
-background:#e5e7eb;
-}
-
-.small{
-font-size:12px;
-opacity:.8;
-line-height:1.5;
-}
-
 </style>
 
 <div class="lss-shell">
 
 <div class="lss-left">
-
-<h1>LSS Creator</h1>
-
-<div class="small">
-
-Ontology-driven graph object creation.
-
-Relationships are inferred from:
-- entity type
-- parent rules
-- namespaces
-- templates
-- graph schema
-
-</div>
-
+<h2>LSS Creator</h2>
+Ontology-driven graph object creation
 </div>
 
 <div class="lss-center">
@@ -807,15 +929,30 @@ Relationships are inferred from:
 ${options}
 </select>
 
-<label>Parent</label>
+<label>Parent Filter</label>
 
 <input
 id="lss-parent-search"
-placeholder="Search parent..."
+placeholder="Type to filter available parents..."
 />
 
-<select id="lss-parent">
-</select>
+<label>Available Parent</label>
+
+<select id="lss-parent"></select>
+
+<label>Create Missing Parent In-Situ</label>
+
+<input
+id="lss-inline-parent-name"
+placeholder="Optional: create parent if not listed"
+/>
+
+<label>Create Missing Grandparent In-Situ</label>
+
+<input
+id="lss-inline-grandparent-name"
+placeholder="Optional: create grandparent first"
+/>
 
 <label>Name</label>
 
@@ -824,26 +961,15 @@ id="lss-name"
 placeholder="AI Foundations"
 />
 
-<div
-id="lss-duplicate-warning"
-class="warning"
->
-⚠ Object already exists
-</div>
-
 <label>Namespace Preview</label>
 
 <div
 id="lss-namespace-preview"
 class="preview"
->
-Select type...
-</div>
+></div>
 
-<div class="buttons">
-
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
 <button
-class="secondary"
 id="lss-close"
 >
 Cancel
@@ -855,7 +981,6 @@ id="lss-create"
 >
 Create Object
 </button>
-
 </div>
 
 </div>
@@ -867,187 +992,235 @@ Create Object
 <div
 id="lss-relationship-preview"
 class="preview"
->
-No relationship yet
-</div>
+></div>
 
 <label>Template Preview</label>
 
 <div
 id="lss-template-preview"
 class="preview"
->
-Select type...
-</div>
+></div>
 
 </div>
 
 </div>
 `;
 
-        async function refresh(){
+          async function refresh(){
 
-          const type =
-            document.getElementById(
-              "lss-type"
-            ).value;
-
-          const name =
-            document.getElementById(
-              "lss-name"
-            ).value;
-
-          const entity =
-            types.find(
-              t => t.name === type
-            );
-
-          const allowedParents =
-            await LSS.findAllowedParents(
-              type
-            );
-
-          const search =
-            (
+            const type =
               document.getElementById(
-                "lss-parent-search"
-              ).value || ""
-            ).toLowerCase();
+                "lss-type"
+              ).value;
 
-          const filtered =
-            allowedParents.filter(
-              p => p.toLowerCase().includes(search)
-            );
+            const name =
+              document.getElementById(
+                "lss-name"
+              ).value;
+
+            const entity =
+              types.find(
+                t => t.name === type
+              );
+
+            const allowedParents =
+              await LSS.findCandidateParents(
+                entity
+              );
+
+            const search =
+              (
+                document.getElementById(
+                  "lss-parent-search"
+                ).value || ""
+              ).toLowerCase();
+
+            const filtered =
+              allowedParents.filter(
+                p => String(p).toLowerCase().includes(search)
+              );
+
+            document.getElementById(
+              "lss-parent"
+            ).innerHTML =
+              filtered.length
+                ? filtered.map(
+                    p=>`<option value="${p}">
+${p}
+</option>`
+                  ).join("")
+                : `<option value="">No parent / root object</option>`;
+
+            const parent =
+              document.getElementById(
+                "lss-parent"
+              ).value;
+
+            document.getElementById(
+              "lss-namespace-preview"
+            ).innerText =
+              `[[${type}/${name}]]`;
+
+            document.getElementById(
+              "lss-relationship-preview"
+            ).innerText =
+parent
+  ? `${parent}
+  └── Related
+      └── ${type}s
+          └── ${type}/${name || "..."}`
+  : `${type}/${name || "..."} will be created as a root/top-level object`;
+
+            document.getElementById(
+              "lss-template-preview"
+            ).innerText =
+              await LSS.expandTemplate(
+                entity.template
+              );
+
+          }
+
+          document.getElementById(
+            "lss-type"
+          ).onchange = refresh;
+
+          document.getElementById(
+            "lss-name"
+          ).oninput = refresh;
+
+          document.getElementById(
+            "lss-parent-search"
+          ).oninput = refresh;
 
           document.getElementById(
             "lss-parent"
-          ).innerHTML =
-            filtered.map(
-              p => `<option value="${p}">${p}</option>`
-            ).join("");
-
-          const parent =
-            document.getElementById(
-              "lss-parent"
-            ).value;
-
-          const namespace =
-            `${type}/${name}`;
+          ).onchange = refresh;
 
           document.getElementById(
-            "lss-namespace-preview"
-          ).innerText =
-            `[[${namespace}]]`;
+            "lss-close"
+          ).onclick = ()=>{
 
-          const exists =
-            await LSS.findExistingPage(
-              namespace
-            );
+            logseq.hideMainUI();
 
-          document.getElementById(
-            "lss-duplicate-warning"
-          ).style.display =
-            exists
-              ? "block"
-              : "none";
+          };
 
-          document.getElementById(
-            "lss-relationship-preview"
-          ).innerText =
-            LSS.renderRelationshipPreview(
-              type,
-              parent,
-              name
-            );
-
-          const template =
-            entity && entity.template
-              ? await LSS.expandTemplate(
-                  entity.template
-                )
-              : "No template";
+          document.addEventListener(
+            "keydown",
+            function(e){
+              if(e.key === "Escape"){
+                logseq.hideMainUI();
+              }
+            }
+          );
 
           document.getElementById(
-            "lss-template-preview"
-          ).innerText =
-            template;
+            "lss-create"
+          ).onclick = async ()=>{
 
-        }
+            const type =
+              document.getElementById(
+                "lss-type"
+              ).value;
 
-        document.getElementById(
-          "lss-type"
-        ).onchange = refresh;
+            const name =
+              document.getElementById(
+                "lss-name"
+              ).value;
 
-        document.getElementById(
-          "lss-name"
-        ).oninput = refresh;
+            let parent =
+              document.getElementById(
+                "lss-parent"
+              ).value;
 
-        document.getElementById(
-          "lss-parent-search"
-        ).oninput = refresh;
+            const inlineParentName =
+              document.getElementById(
+                "lss-inline-parent-name"
+              ).value.trim();
 
-        document.getElementById(
-          "lss-parent"
-        ).onchange = refresh;
+            const inlineGrandparentName =
+              document.getElementById(
+                "lss-inline-grandparent-name"
+              ).value.trim();
 
-        document.getElementById(
-          "lss-close"
-        ).onclick = () => {
+            if(inlineParentName){
 
-          logseq.hideMainUI();
+              const currentEntity =
+                LSS.REGISTRY.entities.find(
+                  e => e.name === type
+                );
 
-        };
+              const rule =
+                (LSS.DYNAMIC_PARENT_RULES || {})[
+                  currentEntity.name
+                ];
 
-        document.getElementById(
-          "lss-create"
-        ).onclick = async () => {
+              const parentEntityPage =
+                rule &&
+                rule.parents &&
+                rule.parents.find(
+                  p => p.startsWith("Entity-Page/")
+                );
 
-          const type =
-            document.getElementById(
-              "lss-type"
-            ).value;
+              if(parentEntityPage){
 
-          const name =
-            document.getElementById(
-              "lss-name"
-            ).value;
+                const parentType =
+                  LSS.toEntityName(
+                    parentEntityPage
+                  );
 
-          const parent =
-            document.getElementById(
-              "lss-parent"
-            ).value;
+                let grandparent = "";
 
-          if(!name){
+                if(inlineGrandparentName){
 
-            logseq.App.showMsg(
-              "Name required",
-              "error"
-            );
+                  const parentEntity =
+                    LSS.REGISTRY.entities.find(
+                      e => e.name === parentType
+                    );
 
-            return;
+                  const parentRule =
+                    (LSS.DYNAMIC_PARENT_RULES || {})[
+                      parentType
+                    ];
 
-          }
+                  const grandparentTypePage =
+                    parentRule &&
+                    parentRule.parents &&
+                    parentRule.parents.find(
+                      p => p.startsWith("Entity-Page/")
+                    );
 
-          const namespace =
-            `${type}/${name}`;
+                  if(grandparentTypePage){
 
-          const exists =
-            await LSS.findExistingPage(
-              namespace
-            );
+                    const grandparentType =
+                      LSS.toEntityName(
+                        grandparentTypePage
+                      );
 
-          if(exists){
+                    await LSS.createEntityInstance(
+                      grandparentType,
+                      inlineGrandparentName,
+                      ""
+                    );
 
-            logseq.App.showMsg(
-              "Object already exists",
-              "error"
-            );
+                    grandparent =
+                      `${grandparentType}/${inlineGrandparentName}`;
 
-            return;
+                  }
 
-          }
+                }
 
-          if(mode === "entity"){
+                await LSS.createEntityInstance(
+                  parentType,
+                  inlineParentName,
+                  grandparent
+                );
+
+                parent =
+                  `${parentType}/${inlineParentName}`;
+
+              }
+
+            }
 
             await LSS.createEntityInstance(
               type,
@@ -1055,22 +1228,47 @@ Select type...
               parent
             );
 
-          }else{
+            logseq.hideMainUI();
 
-            await LSS.createFormInstance(
-              type,
-              name,
-              parent
+          };
+
+          await refresh();
+
+      };
+
+      function main() {
+
+        console.log(
+          "LSS GRAPH ENGINE READY"
+        );
+
+        logseq.App.showMsg(
+          "LSS Graph Engine Loaded"
+        );
+
+        logseq.App.registerCommandPalette(
+          {
+            key:"lss-create-entity",
+            label:"LSS: Create Entity Instance"
+          },
+
+          async ()=>{
+
+            await LSS.showCreatorPanel(
+              "entity"
             );
 
           }
 
-          logseq.hideMainUI();
+        );
 
-        };
+      }
 
-        await refresh();
+      logseq.ready(main)
+        .catch(console.error);
 
-      };
+    </script>
 
+  </body>
 
+</html>
