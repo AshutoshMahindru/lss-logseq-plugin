@@ -563,3 +563,514 @@ registered-at:: ${LSS.nowISO()}`);
     </script>
   </body>
 </html>
+      LSS.findExistingPage = async function(pageName){
+
+        const page =
+          await logseq.Editor.getPage(
+            pageName
+          );
+
+        return !!page;
+
+      };
+
+      LSS.findAllowedParents = async function(typeName){
+
+        const entity =
+          LSS.REGISTRY.entities.find(
+            e => e.name === typeName
+          );
+
+        if(!entity)
+          return [];
+
+        return await LSS.findCandidateParents(
+          entity
+        );
+
+      };
+
+      LSS.renderRelationshipPreview = function(
+        typeName,
+        parentName,
+        objectName
+      ){
+
+        if(
+          !typeName ||
+          !objectName
+        ) return "";
+
+        const plural =
+          typeName.endsWith("s")
+            ? typeName
+            : typeName + "s";
+
+        return `
+${parentName || "Parent"}
+  └── Related
+      └── ${plural}
+          └── ${typeName}/${objectName}
+`;
+
+      };
+
+      LSS.showCreatorPanel = async function(mode) {
+
+        logseq.showMainUI();
+
+        const types =
+          mode === "entity"
+            ? LSS.REGISTRY.entities
+            : LSS.REGISTRY.forms;
+
+        const grouped = {};
+
+        for(const t of types){
+
+          const area =
+            t.area || "Forms";
+
+          grouped[area] =
+            grouped[area] || [];
+
+          grouped[area].push(t);
+
+        }
+
+        const options =
+          Object.entries(grouped)
+            .map(([group,items])=>{
+
+              return `
+<optgroup label="${group}">
+${
+  items.map(
+    i=>`<option value="${i.name}">
+${i.name}
+</option>`
+  ).join("")
+}
+</optgroup>
+`;
+
+            }).join("");
+
+        document.body.innerHTML = `
+
+<style>
+
+body{
+margin:0;
+background:transparent;
+font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;
+}
+
+.lss-shell{
+position:fixed;
+top:72px;
+left:50%;
+transform:translateX(-50%);
+width:920px;
+height:720px;
+background:white;
+border-radius:22px;
+overflow:hidden;
+box-shadow:0 30px 90px rgba(0,0,0,.28);
+display:grid;
+grid-template-columns:260px 1fr 300px;
+z-index:999999;
+border:1px solid #e5e7eb;
+}
+
+.lss-left{
+background:#111827;
+color:white;
+padding:24px;
+overflow:auto;
+}
+
+.lss-center{
+padding:24px;
+overflow:auto;
+}
+
+.lss-right{
+background:#f9fafb;
+padding:24px;
+overflow:auto;
+border-left:1px solid #e5e7eb;
+}
+
+h1{
+font-size:22px;
+margin:0 0 24px 0;
+}
+
+label{
+display:block;
+font-size:12px;
+font-weight:700;
+letter-spacing:.08em;
+text-transform:uppercase;
+margin-bottom:8px;
+color:#6b7280;
+}
+
+input,select{
+width:100%;
+padding:12px;
+border-radius:12px;
+border:1px solid #d1d5db;
+margin-bottom:18px;
+font-size:14px;
+box-sizing:border-box;
+}
+
+.preview{
+background:white;
+border:1px solid #e5e7eb;
+border-radius:14px;
+padding:16px;
+font-size:13px;
+white-space:pre-wrap;
+overflow:auto;
+margin-bottom:18px;
+}
+
+.warning{
+color:#dc2626;
+font-weight:700;
+margin-top:-10px;
+margin-bottom:18px;
+display:none;
+}
+
+.buttons{
+display:flex;
+gap:12px;
+margin-top:24px;
+}
+
+button{
+flex:1;
+padding:14px;
+border-radius:12px;
+font-weight:700;
+border:0;
+cursor:pointer;
+}
+
+.primary{
+background:#2563eb;
+color:white;
+}
+
+.secondary{
+background:#e5e7eb;
+}
+
+.small{
+font-size:12px;
+opacity:.8;
+line-height:1.5;
+}
+
+</style>
+
+<div class="lss-shell">
+
+<div class="lss-left">
+
+<h1>LSS Creator</h1>
+
+<div class="small">
+
+Ontology-driven graph object creation.
+
+Relationships are inferred from:
+- entity type
+- parent rules
+- namespaces
+- templates
+- graph schema
+
+</div>
+
+</div>
+
+<div class="lss-center">
+
+<label>Type</label>
+
+<select id="lss-type">
+${options}
+</select>
+
+<label>Parent</label>
+
+<input
+id="lss-parent-search"
+placeholder="Search parent..."
+/>
+
+<select id="lss-parent">
+</select>
+
+<label>Name</label>
+
+<input
+id="lss-name"
+placeholder="AI Foundations"
+/>
+
+<div
+id="lss-duplicate-warning"
+class="warning"
+>
+⚠ Object already exists
+</div>
+
+<label>Namespace Preview</label>
+
+<div
+id="lss-namespace-preview"
+class="preview"
+>
+Select type...
+</div>
+
+<div class="buttons">
+
+<button
+class="secondary"
+id="lss-close"
+>
+Cancel
+</button>
+
+<button
+class="primary"
+id="lss-create"
+>
+Create Object
+</button>
+
+</div>
+
+</div>
+
+<div class="lss-right">
+
+<label>Relationship Preview</label>
+
+<div
+id="lss-relationship-preview"
+class="preview"
+>
+No relationship yet
+</div>
+
+<label>Template Preview</label>
+
+<div
+id="lss-template-preview"
+class="preview"
+>
+Select type...
+</div>
+
+</div>
+
+</div>
+`;
+
+        async function refresh(){
+
+          const type =
+            document.getElementById(
+              "lss-type"
+            ).value;
+
+          const name =
+            document.getElementById(
+              "lss-name"
+            ).value;
+
+          const entity =
+            types.find(
+              t => t.name === type
+            );
+
+          const allowedParents =
+            await LSS.findAllowedParents(
+              type
+            );
+
+          const search =
+            (
+              document.getElementById(
+                "lss-parent-search"
+              ).value || ""
+            ).toLowerCase();
+
+          const filtered =
+            allowedParents.filter(
+              p => p.toLowerCase().includes(search)
+            );
+
+          document.getElementById(
+            "lss-parent"
+          ).innerHTML =
+            filtered.map(
+              p => `<option value="${p}">${p}</option>`
+            ).join("");
+
+          const parent =
+            document.getElementById(
+              "lss-parent"
+            ).value;
+
+          const namespace =
+            `${type}/${name}`;
+
+          document.getElementById(
+            "lss-namespace-preview"
+          ).innerText =
+            `[[${namespace}]]`;
+
+          const exists =
+            await LSS.findExistingPage(
+              namespace
+            );
+
+          document.getElementById(
+            "lss-duplicate-warning"
+          ).style.display =
+            exists
+              ? "block"
+              : "none";
+
+          document.getElementById(
+            "lss-relationship-preview"
+          ).innerText =
+            LSS.renderRelationshipPreview(
+              type,
+              parent,
+              name
+            );
+
+          const template =
+            entity && entity.template
+              ? await LSS.expandTemplate(
+                  entity.template
+                )
+              : "No template";
+
+          document.getElementById(
+            "lss-template-preview"
+          ).innerText =
+            template;
+
+        }
+
+        document.getElementById(
+          "lss-type"
+        ).onchange = refresh;
+
+        document.getElementById(
+          "lss-name"
+        ).oninput = refresh;
+
+        document.getElementById(
+          "lss-parent-search"
+        ).oninput = refresh;
+
+        document.getElementById(
+          "lss-parent"
+        ).onchange = refresh;
+
+        document.getElementById(
+          "lss-close"
+        ).onclick = () => {
+
+          logseq.hideMainUI();
+
+        };
+
+        document.getElementById(
+          "lss-create"
+        ).onclick = async () => {
+
+          const type =
+            document.getElementById(
+              "lss-type"
+            ).value;
+
+          const name =
+            document.getElementById(
+              "lss-name"
+            ).value;
+
+          const parent =
+            document.getElementById(
+              "lss-parent"
+            ).value;
+
+          if(!name){
+
+            logseq.App.showMsg(
+              "Name required",
+              "error"
+            );
+
+            return;
+
+          }
+
+          const namespace =
+            `${type}/${name}`;
+
+          const exists =
+            await LSS.findExistingPage(
+              namespace
+            );
+
+          if(exists){
+
+            logseq.App.showMsg(
+              "Object already exists",
+              "error"
+            );
+
+            return;
+
+          }
+
+          if(mode === "entity"){
+
+            await LSS.createEntityInstance(
+              type,
+              name,
+              parent
+            );
+
+          }else{
+
+            await LSS.createFormInstance(
+              type,
+              name,
+              parent
+            );
+
+          }
+
+          logseq.hideMainUI();
+
+        };
+
+        await refresh();
+
+      };
+
+
